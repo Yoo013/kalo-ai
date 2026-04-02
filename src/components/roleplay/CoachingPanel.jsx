@@ -68,18 +68,52 @@ export default function CoachingPanel({ sessionActive, sessionEnded, evaluation,
           <ScoreRing value={evaluation.closing} label="Closing" color="#f59e0b" />
         </div>
 
-        {/* Feedback */}
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">Coaching Notes</p>
-          <div className="space-y-2">
-            {(evaluation.feedback || []).map((f, i) => (
-              <div key={i} className="flex gap-2 text-sm text-slate-300 bg-slate-800/60 rounded-xl px-3 py-2.5 border border-slate-700">
-                <CheckCircle2 className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
-                <span>{f}</span>
-              </div>
-            ))}
+{/* Feedback */}
+<div className="space-y-4">
+  <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-3">Coaching Notes</p>
+  
+  {evaluation.feedback?.whatWentWell?.length > 0 && (
+    <div>
+      <p className="text-xs text-emerald-400 font-semibold mb-2">What went well</p>
+      <div className="space-y-2">
+        {evaluation.feedback.whatWentWell.map((f, i) => (
+          <div key={i} className="flex gap-2 text-sm text-slate-300 bg-slate-800/60 rounded-xl px-3 py-2.5 border border-slate-700">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <span>{f}</span>
           </div>
-        </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {evaluation.feedback?.whatWentWrong?.length > 0 && (
+    <div>
+      <p className="text-xs text-red-400 font-semibold mb-2">What to improve</p>
+      <div className="space-y-2">
+        {evaluation.feedback.whatWentWrong.map((f, i) => (
+          <div key={i} className="flex gap-2 text-sm text-slate-300 bg-slate-800/60 rounded-xl px-3 py-2.5 border border-slate-700">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <span>{f}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {evaluation.feedback?.betterResponses?.length > 0 && (
+    <div>
+      <p className="text-xs text-violet-400 font-semibold mb-2">Better responses</p>
+      <div className="space-y-2">
+        {evaluation.feedback.betterResponses.map((f, i) => (
+          <div key={i} className="flex gap-2 text-sm text-slate-300 bg-slate-800/60 rounded-xl px-3 py-2.5 border border-slate-700">
+            <Lightbulb className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+            <span>{f}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+</div>
       </div>
     );
   }

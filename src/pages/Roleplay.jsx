@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useOutletContext } from "react-router-dom";
-import { base44 } from "@/api/base44Client";
 import ScenarioPanel from "@/components/roleplay/ScenarioPanel";
 import ChatPanel from "@/components/roleplay/ChatPanel";
 import CoachingPanel from "@/components/roleplay/CoachingPanel";
+
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
 
 const DEFAULT_SCENARIOS = [
   {
@@ -32,11 +33,29 @@ const DEFAULT_SCENARIOS = [
 const DEFAULT_COMPANY_PROMPT =
   "You are roleplaying as a realistic customer for a sales training simulation. Stay in character at all times. Be human — show emotion, doubt, and occasional interest. Never admit you are an AI.";
 
+async function callOpenAI(messages, jsonMode = false) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      messages,
+      max_tokens: jsonMode ? 600 : 200,
+      temperature: jsonMode ? 0.3 : 0.8,
+      ...(jsonMode && { response_format: { type: "json_object" } }),
+    }),
+  });
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
 export default function Roleplay() {
   const { user } = useOutletContext() || {};
 
-  const [config, setConfig] = useState(null);
-  const [scenarios, setScenarios] = useState(DEFAULT_SCENARIOS);
+  const [scenarios] = useState(DEFAULT_SCENARIOS);
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [difficulty, setDifficulty] = useState("medium");
 
@@ -48,29 +67,17 @@ export default function Roleplay() {
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evaluation, setEvaluation] = useState(null);
   const [sessionDuration, setSessionDuration] = useState(0);
-  const [sessionId, setSessionId] = useState(null);
 
   const timerRef = useRef(null);
   const conversationHistory = useRef([]);
   const systemMessages = useRef([]);
-
-  // Load config
-  useEffect(() => {
-    base44.entities.RoleplayConfig.list().then((configs) => {
-      if (configs?.length > 0) {
-        const cfg = configs[0];
-        setConfig(cfg);
-        if (cfg.scenarios?.length > 0) setScenarios(cfg.scenarios);
-      }
-    }).catch(() => {});
-  }, []);
 
   const handleStart = async () => {
     if (!selectedScenario) return;
 
     conversationHistory.current = [];
     systemMessages.current = [
-      { role: "system", content: config?.company_prompt || DEFAULT_COMPANY_PROMPT },
+      { role: "system", content: DEFAULT_COMPANY_PROMPT },
       { role: "system", content: selectedScenario.prompt },
       { role: "system", content: `Difficulty level: ${difficulty}. ${difficulty === "hard" ? "Be very resistant and difficult." : difficulty === "easy" ? "Be somewhat open and receptive." : "Be moderately skeptical."}` },
       { role: "system", content: "You are the CUSTOMER. Never break character. Never say you are an AI." },
@@ -82,32 +89,15 @@ export default function Roleplay() {
     setSessionDuration(0);
     setSessionActive(true);
 
-    // Create session record
-    try {
-      const session = await base44.entities.RoleplaySession.create({
-        agent_email: user?.email || "",
-        agent_name: user?.full_name || "",
-        scenario_id: selectedScenario.id,
-        scenario_name: selectedScenario.name,
-        difficulty,
-        status: "active",
-        transcript: [],
-      });
-      setSessionId(session.id);
-    } catch {}
-
-    // Start timer
     timerRef.current = setInterval(() => setSessionDuration((d) => d + 1), 1000);
 
-    // AI opens the conversation
     setIsLoading(true);
     try {
       const openingPrompt = [
         ...systemMessages.current,
         { role: "user", content: "[Session started. Begin the scene — you just answered the phone.]" },
       ];
-      const res = await base44.functions.invoke("roleplayMessage", { messages: openingPrompt });
-      const aiReply = res.data?.reply || "Hello?";
+      const aiReply = await callOpenAI(openingPrompt);
       const aiMsg = { role: "assistant", content: aiReply, timestamp: new Date().toISOString() };
       conversationHistory.current.push(aiMsg);
       setMessages([aiMsg]);
@@ -126,10 +116,10 @@ export default function Roleplay() {
     setIsLoading(true);
 
     try {
-      const res = await base44.functions.invoke("roleplayMessage", {
-        messages: [...systemMessages.current, ...conversationHistory.current],
-      });
-      const aiReply = res.data?.reply || "...";
+      const aiReply = await callOpenAI([
+        ...systemMessages.current,
+        ...conversationHistory.current,
+      ]);
       const aiMsg = { role: "assistant", content: aiReply, timestamp: new Date().toISOString() };
       conversationHistory.current.push(aiMsg);
       setMessages((prev) => [...prev, aiMsg]);
@@ -144,24 +134,35 @@ export default function Roleplay() {
     setIsEvaluating(true);
 
     try {
-      const res = await base44.functions.invoke("roleplayEvaluate", {
-        transcript: conversationHistory.current,
-      });
-      const eval_ = res.data;
-      setEvaluation(eval_);
+      const transcriptText = conversationHistory.current
+        .map((m) => `${m.role === "user" ? "Agent" : "Customer"}: ${m.content}`)
+        .join("\n");
 
-      if (sessionId) {
-        await base44.entities.RoleplaySession.update(sessionId, {
-          status: "completed",
-          transcript: conversationHistory.current,
-          score: eval_.score,
-          rapport: eval_.rapport,
-          objection_handling: eval_.objectionHandling,
-          closing: eval_.closing,
-          feedback: eval_.feedback,
-          duration_seconds: sessionDuration,
-        });
-      }
+      const content = await callOpenAI([
+        {
+          role: "user",
+          content: `You are a sales coach. Evaluate this roleplay transcript and return JSON only:
+
+${transcriptText}
+
+Return this exact JSON:
+{
+  "score": 0-100,
+  "rapport": 0-10,
+  "objectionHandling": 0-10,
+  "scriptAdherence": 0-10,
+  "closeAttempt": true or false,
+  "feedback": {
+    "whatWentWell": ["..."],
+    "whatWentWrong": ["..."],
+    "betterResponses": ["..."]
+  }
+}`,
+        },
+      ], true);
+
+      const eval_ = JSON.parse(content);
+      setEvaluation(eval_);
     } catch {}
     setIsEvaluating(false);
   };
@@ -170,7 +171,6 @@ export default function Roleplay() {
 
   return (
     <div className="fixed inset-0 lg:left-64 bg-slate-900 flex flex-col">
-      {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-slate-700/50 flex items-center justify-between bg-slate-900/80 backdrop-blur">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
@@ -189,9 +189,7 @@ export default function Roleplay() {
         )}
       </div>
 
-      {/* 3-column layout */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left panel */}
         <div className="w-64 shrink-0 border-r border-slate-700/50 bg-slate-900 p-5 flex flex-col">
           <ScenarioPanel
             scenarios={scenarios}
@@ -206,7 +204,6 @@ export default function Roleplay() {
           />
         </div>
 
-        {/* Center panel */}
         <div className="flex-1 flex flex-col min-w-0 bg-slate-950 px-6 py-4">
           <ChatPanel
             messages={messages}
@@ -219,7 +216,6 @@ export default function Roleplay() {
           />
         </div>
 
-        {/* Right panel */}
         <div className="w-72 shrink-0 border-l border-slate-700/50 bg-slate-900 p-5 flex flex-col">
           <CoachingPanel
             sessionActive={sessionActive}
